@@ -1,0 +1,441 @@
+---
+title: "Exploring the tidyHeatmap R package"
+author: "Thomas Sandmann"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+## Installing the tidyHeatmap R package
+
+The `tidyHeatmap` R package is available from
+[CRAN](https://cran.r-project.org/package=tidyHeatmap) [^1].
+
+[^1]: Because `tidyHeatmap` relies heavily on other packages from the
+[tidyverse](https://www.tidyverse.org/),
+e.g. the 
+[dplyr](https://dplyr.tidyverse.org//)
+and 
+[tidyr](https://tidyr.tidyverse.org//)
+R packages, it has a relatively deep dependency tree. But that's 
+par for the course if you want to adopt the 
+[tidy tools API](https://tidyverse.tidyverse.org/articles/manifesto.html) 
+by using Posit's toolchain.
+
+The latest release available from CRAN can be installed via: 
+
+```{r}
+#| eval: false
+install.packages("tidyHeatmap")
+```
+
+and the latest development version (used in this tutorial) is available
+from github:
+
+```{r}
+#| eval: false
+remotes::install_github("stemangiola/tidyHeatmap")
+```
+
+🚨 At the time of writing, the latest version available from CRAN (version 
+1.8.1) is outdated; please install & use the latest development version from
+github (currently version 1.10.1) to follow along with this tutorial.
+
+## Targeted lipidomics data published by Xia et al
+
+In this tutorial we will used targeted mass spectrometry data 
+published by 
+[Xia et al, Molecular neurodegeneration, 2022](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7).
+Supplementary table 5 of this publication contains the normalized abundances for
+151 analytes measured across 18 samples. We start by downloading the 
+supplementary excel file and wrangle sample annotations, feature annotations
+and the measurements into a tidy tibble with the `get_published_data()` 
+functxion defined in the callout box below.
+
+::: {.callout-tip  collapse="true"}
+
+## Retrieving & tidying published LC/MS data
+
+```{r}
+#| message: false
+
+library(checkmate)
+library(dplyr)
+library(readxl)
+library(tidyr)
+
+#' @noRd
+#' @param path Scalar character, the path to the supplementary excel file
+#' @importFrom checkmate assert_file
+#' @importFrom readxl read_excel
+.parse_sample_annotations <- function(path) {
+  checkmate::assert_file(path)
+  # parse sample- and feature-annotations, and normalized abundances
+  df <- readxl::read_excel(path, sheet = "sample_annotations")
+  df[, c("sample_id", "cell_number", "genotype", "sex", "batch")]
+}
+
+#' @noRd
+#' @param path Scalar character, the path to the supplementary excel file
+#' @importFrom checkmate assert_file
+#' @importFrom readxl read_excel
+.parse_feature_annotations <- function(path) {
+  checkmate::assert_file(path)
+  df <- readxl::read_excel(path, sheet = "feature_annotations")
+  df <- df[, grep("QTRAP|XEVO|m.z", colnames(df), invert = TRUE)]
+  df <- df[!duplicated(df$component_name), ]
+  df$feature_id <- NULL
+  df <- df[!df$is_internal_standard,]
+  df[, setdiff(
+    colnames(df), c("is_internal_standard", "panel")),
+    drop = FALSE]
+}
+
+#' @noRd
+#' @param path Scalar character, the path to the supplementary excel file
+#' @importFrom checkmate assert_file
+#' @importFrom tidyr pivot_longer
+#' @importFrom readxl read_excel
+.parse_abundances <- function(path) {
+  checkmate::assert_file(path)
+  df <- readxl::read_excel(path, sheet = "peak_area_ratio_to_is")
+  df <- data.frame(
+    component_name = df$component_name,
+    df[, grep("^LA", colnames(df), value = TRUE)]
+  )
+  tidyr::pivot_longer(df, cols = setdiff(colnames(df), "component_name"),
+                      names_to = "sample_id", values_to = "abundance")
+}
+
+#' Retrieve targeted LC/MS data published by Xia et al, 2022
+#' @importFrom dplyr left_join join_by
+#' @export
+#' @return A tidy tibble with 2,718 rows and 9 columns
+#' @source [Xia et al, Molecular neurodegeneration, 2022](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7)
+#' @examples
+#' get_published_data()
+get_published_data <- function() {
+  url <- paste0(
+    "https://static-content.springer.com/esm/art%3A10.1186%2",
+    "Fs13024-022-00547",
+    "-7/MediaObjects/13024_2022_547_MOESM13_ESM.xlsx")
+  
+  # retrieve the first supplementary data file
+  tmp_file <- tempfile(fileext = ".xlsx")
+  download.file(url, tmp_file, quiet = TRUE)
+  # parse sample- and feature-annotations & normalized abundances
+  sample_anno <- .parse_sample_annotations(tmp_file)
+  feature_anno <- .parse_feature_annotations(tmp_file)
+  abundances <- .parse_abundances(tmp_file)
+  # join all tables into a single tidy tibble
+  dplyr::left_join(
+    feature_anno, abundances, by = dplyr::join_by("component_name")) |>
+    dplyr::left_join(sample_anno, by = dplyr::join_by("sample_id")) |>
+    dplyr::mutate(
+      sample_id = factor(sample_id, levels = paste0("LA", 1:18, "C")),
+      sex = factor(sex),
+      ionization = factor(ionization),
+      batch = factor(batch),
+      genotype = factor(genotype, levels = c("WT", "Het", "Hom"))
+    )
+}
+```
+:::
+
+```{r}
+df <- get_published_data()  # a tidy tibble
+```
+
+Now we have the data in a tidy tibble with `r nrow(df)` rows and `r ncol(df)`
+columns.
+
+To control the order of categorical variables (e.g. `genotype` or or `batch`),
+they are encoded as factors.[^2] 
+
+[^2]: For example, the three possible values of `genotype` are ordered according
+to the number of copies of the APP-SAA  transgene: `WT` (zero copies), 
+`Het` (1 copy) and `Hom` (2 copies).
+
+```{r}
+summary(df)
+```
+
+## A first heatmap
+
+The `tidyHeatmap` R package provides wrapper functions that make the
+functionality of the
+[ComplexHeatmap Bioconductor package](https://bioconductor.org/packages/release/bioc/html/ComplexHeatmap.html)
+available within a tidy workflow. [^3]
+
+[^3]: The documentation of the `ComplexHeatmap` package is amazing: the
+[Complete Reference](https://jokergoo.github.io/ComplexHeatmap-reference/book/index.html) contains to 15 chapters.
+
+```{r}
+#| message: false
+
+library(circlize)  # to create continuous color gradients
+library(grid)  # to define witdth / height of annotations using grid::unit()
+library(ragg)  # to generate high quality graphics
+library(RColorBrewer)  # to access predefined color palettes
+library(tidyHeatmap)
+```
+
+Creating a first heatmap is as easy as passing our tidy tibble into the 
+`tidyHeatmap::heatmap()` function, and specifying which columns contain
+row identifiers, column identifiers and values:
+
+```{r}
+heatmap(.data = df, .row = component_name, .column = sample_id, 
+        .value = abundance, scale = "row")
+```
+
+::: {.callout-tip  collapse="false"}
+
+The normalized abundances are hard to interpret (because analytes were
+normalized to different internal standards and don't correspond to absolute
+concentrations). Luckily, we are mainly interested in more interested in the
+relative changes across samples (and groups of samples). By setting 
+`scale = "row"`, the values for each analyte are converted to z-scores - and
+the color scale indicates variation around the mean of each row.
+
+:::
+
+We can pass additional arguments through to the `ComplexHeatmap::Heatmap()`
+function, e.g. specify another method to cluster rows via the 
+`clustering_method_rows` argument, by suppressing column clustering entirely
+via `cluster_columns=FALSE`, or by defining the color palette to use [^4].
+
+[^4]: See 
+[Heatmap's help page](https://www.rdocumentation.org/packages/ComplexHeatmap/versions/1.10.2/topics/Heatmap) 
+for a full list of arguments.
+
+```{r}
+colors <- circlize::colorRamp2(
+            seq(-2, 2, length.out = 11), 
+            RColorBrewer::brewer.pal(11, "RdBu")
+        )
+heatmap(.data = df,
+        .row = component_name, 
+        .column = sample_id, 
+        .value = abundance, 
+        column_title = "Xia et al: targeted LC/MS data",
+        row_title = "Analyte",
+        scale = "row",
+        cluster_columns = FALSE,
+        clustering_method_rows = "ward.D",
+        clustering_method_columns = "ward.D",
+        palette_value = colors
+)
+```
+We can also introduce visual splits between the columns, e.g. separating
+the three genotypes from each other, and assign a different color to each one:
+
+```{r}
+df |>
+  group_by(genotype) |>
+  heatmap(.row = component_name, 
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          scale = "row",
+          cluster_columns = FALSE,
+          clustering_method_rows = "ward.D",
+          clustering_method_columns = "ward.D",
+          palette_value = colors,
+          palette_grouping = list(
+            c("darkgrey", "orange", "firebrick")
+        )
+  )
+```
+## Splitting features
+
+The dendrogram (on the left) indicates that there might be two major groups
+of features in this dataset, e.g. there are two main branches. 
+
+### Cutting the hierarchical clustering result
+
+We can reinforce this result by cutting the dendrogram after two branches have
+arisen.
+
+```{r}
+df |>
+  group_by(genotype) |>
+  heatmap(.row = component_name, 
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          scale = "row",
+          cluster_columns = FALSE,
+          clustering_method_rows = "ward.D",
+          clustering_method_columns = "ward.D",
+          palette_value = colors,
+          palette_grouping = list(
+            c("darkgrey", "orange", "firebrick")
+        )
+  ) |>
+    split_rows(2)
+```
+
+::: {.callout-tip  collapse="true"}
+
+### K-means clustering
+
+Alternatively, we can can perform
+[k-means clustering](https://en.wikipedia.org/wiki/K-means_clustering)
+on the rows (or columns) by specifying the number of clusters (k) to isolate
+via the `row_km` argument. Our current dataset contains missing values 
+(`NA`), which is incompatible with the k-means clustering algorithm. To use this
+method we first need to decide how to handle missing values, e.g. drop analytes
+or impute reasonable values.
+
+:::
+
+## Adding annotations
+
+The `annotation_tile()` function[^5] allows us to add additional annotations to
+our heatmap, e.g. to identify 
+
+- columns from the `batches` or correspoding to animals with male or female 
+  `sex` in an annotation bar on top of the heatmap, or
+- rows with values from different `ionization` conditions in an annotation
+  strip on the left of the heatmap.
+
+[^5]: Prior to `tidyHeatmap` version 1.9.0, the `add_tile()` function was used
+instead. It is now deprecated in favor of `annotation_tile()`. (At the time of
+writing, the latest version available from CRAN is version 1.8.1; please
+install & use the latest development version from github to follow along this
+tutorial.)
+
+
+```{r}
+df |>
+  group_by(genotype) |>
+  heatmap(.row = component_name, 
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          scale = "row",
+          cluster_columns = FALSE,
+          clustering_method_rows = "ward.D",
+          clustering_method_columns = "ward.D",
+          palette_value = colors,
+          palette_grouping = list(
+            c("darkgrey", "orange", "firebrick")
+        )
+  ) |>
+    annotation_tile(
+        batch, 
+        palette = RColorBrewer::brewer.pal(3, "Dark2")
+    ) |>
+    annotation_tile(sex, 
+             palette = c("skyblue", "pink")) |>
+    annotation_tile(ionization, size = grid::unit(5, "points"))
+```
+
+::: {.callout-tip  collapse="true"}
+
+### Row or column annotations?
+
+The `annotation_tile()` function does not require us to specify whether we
+are adding row or column annotations. Instead, it infers it automatically:
+
+- Does each value used to define a row of the heatmap (e.g. `component_name`)
+  map to a single value in the selected column of the data.frame?
+  - If yes, create a row annotation strip.
+- Does each value used to define a column of the heatmap (e.g. `sample_id`)
+  map to a single value in the selected column of the data.frame?
+  - If yes, create a column annotation.
+- If neither of the above are true, an error is raised.
+
+:::
+
+## Adding quantitative annotations
+
+Some annotations are quantitative, and may be better communicated in a plot.
+Let's display the number of cells that were analyzed in each sample on top of
+our heatmap with the `add_point()` function:
+
+```{r}
+df |>
+  group_by(genotype) |>
+  heatmap(.row = component_name, 
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          scale = "row",
+          cluster_columns = FALSE,
+          clustering_method_rows = "ward.D",
+          clustering_method_columns = "ward.D",
+          palette_value = colors,
+          palette_grouping = list(
+            c("darkgrey", "orange", "firebrick")
+          )
+  ) |>
+  annotation_tile(
+    batch, 
+    palette = RColorBrewer::brewer.pal(3, "Dark2")
+  ) |>
+  annotation_tile(
+    sex, 
+    palette = c("skyblue", "pink")
+  ) |>
+  annotation_tile(ionization, size = grid::unit(5, "points"))
+```
+
+## Overlaying symbols
+
+To highlight specific cells in our heatmap, the `layer_point()`, 
+`layer_arrow_up()`, `layer_arrow_down()`, `layer_diamond()`, `layer_square()`,
+`layer_star()`, `layer_text()` or `layer_asterisk()`
+functions can be used, together with a filter condition [^5].
+
+[^6]: At the time of writing, the latest version of the `tidyHeatmap` package
+available from CRAN is version 1.8.1. The development version used here, 
+available [from github](https://github.com/stemangiola/tidyHeatmap),
+contains additional functionality, including e.g. the `layer_star()` and - most
+importantly - `layer_asterisk()`.
+
+```{r}
+df |>
+  group_by(genotype) |>
+  heatmap(.row = component_name, 
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          scale = "row",
+          cluster_columns = FALSE,
+          clustering_method_rows = "ward.D",
+          clustering_method_columns = "ward.D",
+          palette_value = colors,
+          palette_grouping = list(
+            c("darkgrey", "orange", "firebrick")
+        )
+  ) |>
+  annotation_tile(
+    batch, 
+    palette = RColorBrewer::brewer.pal(3, "Dark2")
+  ) |>
+  annotation_tile(sex, 
+                  palette = c("skyblue", "pink"))  |>
+  annotation_tile(ionization, size = grid::unit(5, "points")) |>
+  layer_asterisk(
+    component_name == "PC(40:6)" & sample_id %in% c("LA2C", "LA10C")
+  )
+```
+
+## Reproducibility
+
+<details>
+<summary>
+Session information
+</summary>
+
+```{r}
+sessionInfo()
+```
+</details>
