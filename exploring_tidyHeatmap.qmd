@@ -41,28 +41,64 @@ remotes::install_github("stemangiola/tidyHeatmap")
 1.8.1) is outdated; please install & use the latest development version from
 github (currently version 1.10.1) to follow along with this tutorial.
 
-## Targeted lipidomics data published by Xia et al
-
-In this tutorial we will used targeted mass spectrometry data 
-published by 
-[Xia et al, Molecular neurodegeneration, 2022](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7).
-Supplementary table 5 of this publication contains the normalized abundances for
-151 analytes measured across 18 samples. We start by downloading the 
-supplementary excel file and wrangle sample annotations, feature annotations
-and the measurements into a tidy tibble with the `get_published_data()` 
-functxion defined in the callout box below.
-
-::: {.callout-tip  collapse="true"}
-
-## Retrieving & tidying published LC/MS data
+In addition, we will use the following R packages, all of which can be installed
+from CRAN with `install.packages()`:
 
 ```{r}
 #| message: false
 
-library(checkmate)
-library(dplyr)
-library(readxl)
-library(tidyr)
+library(circlize)  # to create continuous color gradients
+library(dplyr)  # wrangling tidy tables
+library(grid)  # to define witdth / height of annotations using grid::unit()
+library(ragg)  # to generate high quality graphics
+library(RColorBrewer)  # to access predefined color palettes
+library(tibble)  # to convert data.frames to tibbles
+library(tidyHeatmap) # the main act: plotting & annotating heatmaps
+```
+
+## Targeted lipidomics data published by Xia et al
+
+In this tutorial we will used targeted mass spectrometry data 
+published by 
+[Xia et al, Molecular neurodegeneration, 2022](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7)
+and reproduce 
+[Figures 5a and 5b [^2]](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7/figures/5):
+
+![Figure 5 from Xia et al, 2022](https://media.springernature.com/full/springer-static/image/art%3A10.1186%2Fs13024-022-00547-7/MediaObjects/13024_2022_547_Fig5_HTML.png?as=webp)
+
+[^2]: Well approximately: In the publication, the authors estimated and
+subtracted effects due to `batch`, `sex` and two
+[surrogate variables](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1994707/)
+with a linear model, and then plotted the 
+[residuals](https://en.wikipedia.org/wiki/Errors_and_residuals)
+for each data point. This adjustment was motivated by the
+experimental design and the statistical analysis, which also incorporated
+these covariates to determine whether differences between the experimental
+groups were statistically significant. Here, we will plot the normalized
+abundances for each analyte directly, without any adjustment. Nevertheless,
+the heatmap will look quite similar (albeit not quite as _smooth_ as the 
+original).
+
+## Available datasets
+
+- Normalized abundances: [Supplementary table 8](https://static-content.springer.com/esm/art%3A10.1186%2Fs13024-022-00547-7/MediaObjects/13024_2022_547_MOESM15_ESM.xlsx)
+is an excel file containing the normalized abundances for
+225 analytes measured across 30 samples.
+  - The `get_abundances()` function defined in the callout box below starts by
+  downloading the supplementary excel file, and then wrangles sample
+  annotations, feature annotations and the measurements into a tidy tibble.
+  - Alternatively, you can download a CSV file with the pre-wrangled dataset 💾
+  [here](https://raw.githubusercontent.com/tomsing1/tidy_heatmap/main/abundances.csv).
+
+::: {.callout-tip  collapse="true"}
+
+#### The get_abundances() function
+
+```{r}
+#| message: false
+library(checkmate)  # helper function for (optional) helper functions
+library(readxl)  # reading excel files
+library(tidyr)  # pivoting from wide to long tables (and more!)
 
 #' @noRd
 #' @param path Scalar character, the path to the supplementary excel file
@@ -72,7 +108,11 @@ library(tidyr)
   checkmate::assert_file(path)
   # parse sample- and feature-annotations, and normalized abundances
   df <- readxl::read_excel(path, sheet = "sample_annotations")
-  df[, c("sample_id", "cell_number", "genotype", "sex", "batch")]
+  df$sample_id <- vapply(
+    strsplit(df$sample_id, "_"), \(x) x[[2]], FUN.VALUE = character(1)
+  )
+  df[, c("sample_id",  "description", "cell_number", "genotype", "condition",
+         "sex", "batch")]
 }
 
 #' @noRd
@@ -87,7 +127,7 @@ library(tidyr)
   df$feature_id <- NULL
   df <- df[!df$is_internal_standard,]
   df[, setdiff(
-    colnames(df), c("is_internal_standard", "panel")),
+    colnames(df), c("is_internal_standard")),
     drop = FALSE]
 }
 
@@ -101,24 +141,27 @@ library(tidyr)
   df <- readxl::read_excel(path, sheet = "peak_area_ratio_to_is")
   df <- data.frame(
     component_name = df$component_name,
-    df[, grep("^LA", colnames(df), value = TRUE)]
+    df[, grep("^NE", colnames(df), value = TRUE)]
   )
-  tidyr::pivot_longer(df, cols = setdiff(colnames(df), "component_name"),
-                      names_to = "sample_id", values_to = "abundance")
+  df <- tidyr::pivot_longer(df, cols = setdiff(colnames(df), "component_name"),
+                            names_to = "sample_id", values_to = "abundance")
+  df$sample_id <- vapply(
+    strsplit(df$sample_id, "_"), \(x) x[[2]], FUN.VALUE = character(1)
+  )
+  return(df)
 }
 
-#' Retrieve targeted LC/MS data published by Xia et al, 2022
+#' Retrieve targeted LC/MS data published by Xia et al, 2022 as Suppl. Table 7
 #' @importFrom dplyr left_join join_by
 #' @export
 #' @return A tidy tibble with 2,718 rows and 9 columns
 #' @source [Xia et al, Molecular neurodegeneration, 2022](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7)
 #' @examples
-#' get_published_data()
-get_published_data <- function() {
+#' get_abundances()
+get_abundances <- function() {
   url <- paste0(
-    "https://static-content.springer.com/esm/art%3A10.1186%2",
-    "Fs13024-022-00547",
-    "-7/MediaObjects/13024_2022_547_MOESM13_ESM.xlsx")
+    "https://static-content.springer.com/esm/art%3A10.1186%2Fs13024-022-00547-7/",
+    "MediaObjects/13024_2022_547_MOESM15_ESM.xlsx")
   
   # retrieve the first supplementary data file
   tmp_file <- tempfile(fileext = ".xlsx")
@@ -132,59 +175,150 @@ get_published_data <- function() {
     feature_anno, abundances, by = dplyr::join_by("component_name")) |>
     dplyr::left_join(sample_anno, by = dplyr::join_by("sample_id")) |>
     dplyr::mutate(
-      sample_id = factor(sample_id, levels = paste0("LA", 1:18, "C")),
+      sample_id = factor(sample_id, levels = as.character(seq.int(30))),
       sex = factor(sex),
+      condition = factor(condition),
       ionization = factor(ionization),
       batch = factor(batch),
-      genotype = factor(genotype, levels = c("WT", "Het", "Hom"))
+      genotype = factor(genotype, levels = c("WT", "APP_SAA_Hom")),
+      group = factor(paste(genotype, condition, sep = ", "),
+                     levels = c("WT, Methoxy_Neg", "APP_SAA_Hom, Methoxy_Neg",
+                                "APP_SAA_Hom, Methoxy_Pos")),
+      group = dplyr::recode_factor(
+        group, 
+        "WT, Methoxy_Neg" = "WT, Methoxy-", 
+        "APP_SAA_Hom, Methoxy_Neg" = "APP-SAA, Methoxy-",
+        "APP_SAA_Hom, Methoxy_Pos" = "APP-SAA, Methoxy+"
+      )
     )
+}
+```
+
+:::
+
+- Differential abundance analysis: [Supplementary table 8](https://static-content.springer.com/esm/art%3A10.1186%2Fs13024-022-00547-7/MediaObjects/13024_2022_547_MOESM16_ESM.xlsx)
+is an excel file with the results of the differential abundance analysis
+(performed by fitting a linear model for each analyte with the 
+[limma Bioconductor package](https://bioconductor.org/packages/release/bioc/html/limma.html)
+), e.g. it provides log2 fold changes, p-values, and adjusted p-values (FDR)
+for multiple comparisons of interest. 
+  - The `get_stats()` function, shown in the
+  callout box below, retrieves and parses this file for us and returns a 
+  tidy tibble.
+  - Alternatively, you can download the pre-wrangled statistics in CSV file 💾
+  [here](https://raw.githubusercontent.com/tomsing1/tidy_heatmap/main/statistics.csv).
+
+::: {.callout-tip  collapse="true"}
+
+#### The get_stats() function
+
+````{r}
+#| message: false
+
+library(readxl)  # reading excel files
+
+#' Retrieve and parse differential abundance statistics from Suppl. Table 8
+#' @noRd
+#' @examples
+#' get_stats()
+get_stats <- function() {
+  url <- paste0(
+    "https://static-content.springer.com/esm/art%3A10.1186%2Fs13024",
+    "-022-00547-7/MediaObjects/13024_2022_547_MOESM16_ESM.xlsx"
+  )
+  tmp_file <- tempfile(fileext = ".xlsx")
+  download.file(url, tmp_file, quiet = TRUE)
+  readxl::read_excel(tmp_file, sheet = "3. APP_pos_vs_WT_neg") |>
+    dplyr::rename(component_name = "symbol")
 }
 ```
 :::
 
+First, we download and read the two CSV files with the pre-wrangled abundance
+and statistics data. For compatibility with the `tidyHeatmap` package,
+we convert both tables into tibbles as well:
+
 ```{r}
-df <- get_published_data()  # a tidy tibble
+df <- read.csv(
+  'https://raw.githubusercontent.com/tomsing1/tidy_heatmap/main/abundances.csv',
+  stringsAsFactors=TRUE) |>
+  tibble::as_tibble()
+stats <- read.csv(
+  'https://raw.githubusercontent.com/tomsing1/tidy_heatmap/main/statistics.csv',
+  stringsAsFactors=TRUE) |>
+  tibble::as_tibble()
+stopifnot(all(stats$component_name %in% df$component_name))
+```
+
+Xia et al only included analytes with a log2 fold change > 20% and an adjusted
+p-values < 0.1 in Figure 5. Let's identify the names of the significant analytes
+in our `stats` data.frame by applying these thresholds. Then we order the
+analytes by their log2 fold change and pull out the `component_name` column.
+
+```{r}
+significant <- stats |>
+  dplyr::filter(abs(stats$logFC) > 0.2, adj.P.Val < 0.1) |>
+  dplyr::arrange(desc(logFC)) |>
+  dplyr::pull(component_name)
+head(significant)
+```
+
+We retain `r length(significant)` significant analytes, e.g. `GM3(d36:1)`,
+`TG(20:4_36:3)` and `Spermine` are most strongly increased in
+APP-SAA, methoxy+ compared to WT, methoxy- samples.
+
+Next, we subset the abundance table (`df`) to only retain these significant
+analytes:
+
+```{r}
+df <- df |>
+  dplyr::filter(component_name %in% significant)
 ```
 
 Now we have the data in a tidy tibble with `r nrow(df)` rows and `r ncol(df)`
 columns.
 
 To control the order of categorical variables (e.g. `genotype` or or `batch`),
-they are encoded as factors.[^2] 
+they are encoded as factors.[^3]. To match the order of the groups in Figure 5,
+we `recode` the levels of the `group` variable, so the `WT, Methoxy-` group
+is listed first:
 
-[^2]: For example, the three possible values of `genotype` are ordered according
-to the number of copies of the APP-SAA  transgene: `WT` (zero copies), 
-`Het` (1 copy) and `Hom` (2 copies).
+```{r}
+df$group = dplyr::recode_factor(
+    df$group, 
+    "WT, Methoxy_Neg" = "WT, Methoxy-", 
+    "APP_SAA_Hom, Methoxy_Neg" = "APP-SAA, Methoxy-",
+    "APP_SAA_Hom, Methoxy_Pos" = "APP-SAA, Methoxy+"
+)
+```
+
+[^3]: For example, the two possible values of `genotype` are: `WT` and
+`APP_SAA_Hom`, and the three levels of the `group` variable are
+`WT, Methoxy-`, `APP-SAA, Methoxy-` and `APP-SAA, Methoxy+`.
 
 ```{r}
 summary(df)
 ```
+
+We are ready to plot our first heatmap!
 
 ## A first heatmap
 
 The `tidyHeatmap` R package provides wrapper functions that make the
 functionality of the
 [ComplexHeatmap Bioconductor package](https://bioconductor.org/packages/release/bioc/html/ComplexHeatmap.html)
-available within a tidy workflow. [^3]
+available within a tidy workflow. [^4]
 
-[^3]: The documentation of the `ComplexHeatmap` package is amazing: the
+[^4]: The documentation of the `ComplexHeatmap` package is amazing: the
 [Complete Reference](https://jokergoo.github.io/ComplexHeatmap-reference/book/index.html) contains to 15 chapters.
-
-```{r}
-#| message: false
-
-library(circlize)  # to create continuous color gradients
-library(grid)  # to define witdth / height of annotations using grid::unit()
-library(ragg)  # to generate high quality graphics
-library(RColorBrewer)  # to access predefined color palettes
-library(tidyHeatmap)
-```
 
 Creating a first heatmap is as easy as passing our tidy tibble into the 
 `tidyHeatmap::heatmap()` function, and specifying which columns contain
 row identifiers, column identifiers and values:
 
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 heatmap(.data = df, .row = component_name, .column = sample_id, 
         .value = abundance, scale = "row")
 ```
@@ -203,17 +337,21 @@ the color scale indicates variation around the mean of each row.
 We can pass additional arguments through to the `ComplexHeatmap::Heatmap()`
 function, e.g. specify another method to cluster rows via the 
 `clustering_method_rows` argument, by suppressing column clustering entirely
-via `cluster_columns=FALSE`, or by defining the color palette to use [^4].
+via `cluster_columns=FALSE`, or by defining the color palette to use [^5].
 
-[^4]: See 
+[^5]: See 
 [Heatmap's help page](https://www.rdocumentation.org/packages/ComplexHeatmap/versions/1.10.2/topics/Heatmap) 
 for a full list of arguments.
 
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 colors <- circlize::colorRamp2(
-            seq(-2, 2, length.out = 11), 
-            RColorBrewer::brewer.pal(11, "RdBu")
-        )
+  breaks = c(-2, 0, 2),
+  # seq(2, -2, length.out = 11), 
+  colors = c("navy", "white", "firebrick")
+  # RColorBrewer::brewer.pal(11, "RdBu")
+)
 heatmap(.data = df,
         .row = component_name, 
         .column = sample_id, 
@@ -223,7 +361,6 @@ heatmap(.data = df,
         scale = "row",
         cluster_columns = FALSE,
         clustering_method_rows = "ward.D",
-        clustering_method_columns = "ward.D",
         palette_value = colors
 )
 ```
@@ -231,8 +368,10 @@ We can also introduce visual splits between the columns, e.g. separating
 the three genotypes from each other, and assign a different color to each one:
 
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 df |>
-  group_by(genotype) |>
+  group_by(group) |>
   heatmap(.row = component_name, 
           .column = sample_id, 
           .value = abundance, 
@@ -248,6 +387,9 @@ df |>
         )
   )
 ```
+
+::: {.callout-tip  collapse="true"}
+
 ## Splitting features
 
 The dendrogram (on the left) indicates that there might be two major groups
@@ -259,8 +401,10 @@ We can reinforce this result by cutting the dendrogram after two branches have
 arisen.
 
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 df |>
-  group_by(genotype) |>
+  group_by(group) |>
   heatmap(.row = component_name, 
           .column = sample_id, 
           .value = abundance, 
@@ -278,8 +422,6 @@ df |>
     split_rows(2)
 ```
 
-::: {.callout-tip  collapse="true"}
-
 ### K-means clustering
 
 Alternatively, we can can perform
@@ -294,15 +436,15 @@ or impute reasonable values.
 
 ## Adding annotations
 
-The `annotation_tile()` function[^5] allows us to add additional annotations to
+The `annotation_tile()` function[^6] allows us to add additional annotations to
 our heatmap, e.g. to identify 
 
 - columns from the `batches` or correspoding to animals with male or female 
   `sex` in an annotation bar on top of the heatmap, or
-- rows with values from different `ionization` conditions in an annotation
+- rows with values from different `panels` (lipds, metabolits) in an annotation
   strip on the left of the heatmap.
 
-[^5]: Prior to `tidyHeatmap` version 1.9.0, the `add_tile()` function was used
+[^6]: Prior to `tidyHeatmap` version 1.9.0, the `add_tile()` function was used
 instead. It is now deprecated in favor of `annotation_tile()`. (At the time of
 writing, the latest version available from CRAN is version 1.8.1; please
 install & use the latest development version from github to follow along this
@@ -310,8 +452,10 @@ tutorial.)
 
 
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 df |>
-  group_by(genotype) |>
+  group_by(group) |>
   heatmap(.row = component_name, 
           .column = sample_id, 
           .value = abundance, 
@@ -332,7 +476,7 @@ df |>
     ) |>
     annotation_tile(sex, 
              palette = c("skyblue", "pink")) |>
-    annotation_tile(ionization, size = grid::unit(5, "points"))
+    annotation_tile(panel, size = grid::unit(5, "points"))
 ```
 
 ::: {.callout-tip  collapse="true"}
@@ -359,8 +503,10 @@ Let's display the number of cells that were analyzed in each sample on top of
 our heatmap with the `add_point()` function:
 
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 df |>
-  group_by(genotype) |>
+  group_by(group) |>
   heatmap(.row = component_name, 
           .column = sample_id, 
           .value = abundance, 
@@ -383,25 +529,33 @@ df |>
     sex, 
     palette = c("skyblue", "pink")
   ) |>
-  annotation_tile(ionization, size = grid::unit(5, "points"))
+  annotation_tile(panel, size = grid::unit(5, "points")) |>
+  annotation_point(cell_number)
 ```
+
+::: {.callout-tip  collapse="true"}
 
 ## Overlaying symbols
 
 To highlight specific cells in our heatmap, the `layer_point()`, 
 `layer_arrow_up()`, `layer_arrow_down()`, `layer_diamond()`, `layer_square()`,
 `layer_star()`, `layer_text()` or `layer_asterisk()`
-functions can be used, together with a filter condition [^5].
+functions can be used, together with a filter condition [^7].
 
-[^6]: At the time of writing, the latest version of the `tidyHeatmap` package
+[^7]: At the time of writing, the latest version of the `tidyHeatmap` package
 available from CRAN is version 1.8.1. The development version used here, 
 available [from github](https://github.com/stemangiola/tidyHeatmap),
 contains additional functionality, including e.g. the `layer_star()` and - most
 importantly - `layer_asterisk()`.
 
+Can you spot the asterisks for `GM3(d36:1)` for samples 1, 3, and 6 in the 
+heatmap below?
+
 ```{r}
+#| fig-width: 7.5
+#| fig-height: 10
 df |>
-  group_by(genotype) |>
+  group_by(group) |>
   heatmap(.row = component_name, 
           .column = sample_id, 
           .value = abundance, 
@@ -422,11 +576,136 @@ df |>
   ) |>
   annotation_tile(sex, 
                   palette = c("skyblue", "pink"))  |>
-  annotation_tile(ionization, size = grid::unit(5, "points")) |>
+  annotation_tile(panel, size = grid::unit(5, "points")) |>
   layer_asterisk(
-    component_name == "PC(40:6)" & sample_id %in% c("LA2C", "LA10C")
+    component_name == "GM3(d36:1)" & sample_id %in% c("1", "3", "6")
   )
 ```
+
+:::
+
+## Manually ordering rows
+
+For Figure 5, Xia et al manually ordered the rows, with those analytes showing
+the largest log2 fold increases at the top, and those with the largest decreases
+(e.g. negative log2 fold changes) at the bottom. 
+
+To reproduce this, we switch off the clustering of the rows, and change the
+order of the `component_name` factor to the `significant` character vector - 
+which is ordered from largest to smallest fold change (see above) - with the
+`dplyr::mutate()` function.
+
+```{r}
+#| fig-width: 7.5
+#| fig-height: 10
+
+df |>
+  dplyr::mutate(
+    component_name = factor(component_name, levels = significant)
+  ) |>
+  group_by(group, panel) |>
+  heatmap(.row = component_name, 
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          scale = "row",
+          cluster_columns = FALSE,
+          cluster_rows = FALSE,
+          palette_value = colors,
+          palette_grouping = list(
+            palette.colors(2, "Set1"),
+            c("darkgrey", "orange", "firebrick")
+        )
+  ) |>
+  annotation_tile(
+    batch, 
+    palette = RColorBrewer::brewer.pal(3, "Dark2"),
+    size = grid::unit(10, "points")
+  ) |>
+  annotation_tile(
+    sex, 
+    palette = c("skyblue", "pink"),
+    size = grid::unit(10, "points")
+  )
+```
+
+In this step, we also changed the `group_by` command: we grouped by both
+the `group` and the `panel` annotations, splitting columns and rows of our
+heatmap into separate panels, respectively.
+
+## Manually scaling rows
+
+So far, we have scaled each row by converting the measurements for each
+analyte to 
+[z-scores](https://en.wikipedia.org/wiki/Standard_score),
+and the colors reflect differences from the overall mean across all samples.
+
+In many experiments, including this one, there is an explicit experimental 
+group that provides a natural baseline. The effects of the `APP-SAA` genotype
+is usually interpret relative to the `WT` control group. We therefore center
+the abundances by subtracting the median value observed in this 
+(e.g. the `WT, methoxy-`) group. Now the colors indicate log2 fold changes
+relative to the median in the control group.
+
+::: {.callout-tip  collapse="false"}
+
+Here, we use functions from the `dplyr` package to 
+
+1. `group_by`: group the tibble by `component_name`, so we can perform
+  calculations separately for each analyte,
+2. `mutate`: calculate the median for the abundances observed in the
+   `WT, Methoxy-` group (for this analyte)
+3. `mutate`: subtract the control median from each value (for this analyte).
+4. `ungroup`: ungroup the tibble, so we can continue with the full dataset.
+
+:::
+
+```{r}
+#| message: false
+#| fig-width: 7.5
+#| fig-height: 10
+df |>
+  dplyr::mutate(
+    component_name = factor(component_name, levels = significant)
+  ) |>
+  dplyr::group_by(component_name) |>
+  dplyr::mutate(
+    ctrl_median = median(abundance[group == "WT, Methoxy-"], na.rm = TRUE),
+    abundance = abundance - ctrl_median
+  ) |>
+  dplyr::ungroup() |>
+  group_by(group, panel) |>
+  heatmap(.row = component_name,
+          .column = sample_id, 
+          .value = abundance, 
+          column_title = "Xia et al: targeted LC/MS data",
+          row_title = "Analyte",
+          cluster_columns = FALSE,
+          cluster_rows = FALSE,
+          show_column_names = FALSE,
+          row_names_gp = grid::gpar(fontsize = 6),
+          palette_value = colors,
+           palette_grouping = list(
+            palette.colors(2, "Set1"),
+            c("darkgrey", "orange", "firebrick")
+        )
+  ) |>
+  annotation_tile(
+    batch, 
+    palette = RColorBrewer::brewer.pal(3, "Dark2"),
+    size = grid::unit(10, "points")
+  ) |>
+  annotation_tile(
+    sex, 
+    palette = c("skyblue", "pink"),
+    size = grid::unit(10, "points")
+  )
+```
+
+We also added the `row_names_gp = grid::gpar(fontsize = 6)` argument to the
+`heatmap()` call, increasing the font size of the row labels. (They are still
+a bit on the small side, so you might want to consider labelling only a subset.)
 
 ## Reproducibility
 
@@ -438,4 +717,5 @@ Session information
 ```{r}
 sessionInfo()
 ```
+
 </details>
