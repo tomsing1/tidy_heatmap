@@ -205,7 +205,7 @@ for multiple comparisons of interest.
   - The `get_stats()` function, shown in the
   callout box below, retrieves and parses this file for us and returns a 
   tidy tibble.
-  - Alternatively, you can download the pre-wrangled statistics in CSV file 💾
+  - Alternatively, you can download the pre-wrangled statistics in a CSV file 💾
   [here](https://raw.githubusercontent.com/tomsing1/tidy_heatmap/main/statistics.csv).
 
 ::: {.callout-tip  collapse="true"}
