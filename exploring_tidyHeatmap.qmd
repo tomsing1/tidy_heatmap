@@ -37,9 +37,12 @@ from github:
 remotes::install_github("stemangiola/tidyHeatmap")
 ```
 
-🚨 At the time of writing, the latest version available from CRAN (version 
+::: { .callout-note }
+ At the time of writing, the latest version available from CRAN (version 
 1.8.1) is outdated; please install & use the latest development version from
-github (currently version 1.10.1) to follow along with this tutorial.
+github (currently version 1.10.2) to follow along with this tutorial.
+
+:::
 
 In addition, we will use the following R packages, all of which can be installed
 from CRAN with `install.packages()`:
@@ -62,11 +65,12 @@ In this tutorial we will used targeted mass spectrometry data
 published by 
 [Xia et al, Molecular neurodegeneration, 2022](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7)
 and reproduce 
-[Figures 5a and 5b [^2]](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7/figures/5):
+Figures 5a and 5b[^2]:
 
 ![Figure 5 from Xia et al, 2022](https://media.springernature.com/full/springer-static/image/art%3A10.1186%2Fs13024-022-00547-7/MediaObjects/13024_2022_547_Fig5_HTML.png?as=webp)
 
-[^2]: Well approximately: In the publication, the authors estimated and
+[^2]: Well approximately: 
+[In the publication](https://molecularneurodegeneration.biomedcentral.com/articles/10.1186/s13024-022-00547-7/figures/5) the authors estimated and
 subtracted effects due to `batch`, `sex` and two
 [surrogate variables](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1994707/)
 with a linear model, and then plotted the 
@@ -87,7 +91,7 @@ is an excel file containing the normalized abundances for
   - The `get_abundances()` function defined in the callout box below starts by
   downloading the supplementary excel file, and then wrangles sample
   annotations, feature annotations and the measurements into a tidy tibble.
-  - Alternatively, you can download a CSV file with the pre-wrangled dataset 💾
+  - Alternatively, you can download a CSV file with the pre-wrangled dataset
   [here](https://raw.githubusercontent.com/tomsing1/tidy_heatmap/main/abundances.csv).
 
 ::: {.callout-tip  collapse="true"}
